@@ -73,11 +73,15 @@ public class State {
     /************* Starts a random game with both players making random moves **********/
     void playRandomGame() {
         char[][] newBoard = board;
+        boolean isGameOver = false;
 
-        while(true) {
+        System.err.println("Now playing game with random moves\n");
+
+        while(!isGameOver) {
             newBoard = makeRandomMove(newBoard);
-            gameOver(newBoard);
+            isGameOver = gameOver(newBoard);
         }
+
     }
 
     char[][] makeRandomMove(char[][] board){
@@ -85,13 +89,28 @@ public class State {
 
         //if we dont have any moves to make on the board, we lost
         if(moveList.size() <= 0){
-            gameOver(board);
+            System.err.println(sideOnMove + " ran out of moves!");
+            printBoard(board);
             System.exit(-1);
         }
 
+        //printMoveList(moveList);
+
         //pick random move
-        int index = (int)Math.random() % (moveList.size() - 1);
+        int index;
+        if(moveList.size() == 1) {
+            index = 1;
+        }
+        else {
+            index = (int) Math.random() % (moveList.size() - 1);
+        }
+
+        //TODO: Not working with single move to make
         Move moveToMake = moveList.get(index);
+
+        System.err.print("Moving: ");
+        moveToMake.printMove();
+
 
         return makeMove(moveToMake, board);
 
@@ -99,10 +118,65 @@ public class State {
     }
 
     char[][] makeMove(Move move, char[][] board) {
-        return null;
+
+        //make sure we're moving the right square
+        assert board[move.src.xCord][move.src.yCord] != '.';
+
+        //grab the piece to move
+        char pieceToMove = board[move.src.xCord][move.src.yCord];
+
+        //make sure were moving the right color
+        assert sideOnMove == getColor(pieceToMove);
+
+        //pick piece up
+        board[move.src.xCord][move.src.yCord] = '.';
+
+        //place piece
+        board[move.dest.xCord][move.dest.yCord] = pieceToMove;
+
+        //increment move counts, switch sides and print board
+        if(sideOnMove == 'B') {
+            moveCount += 1;
+        }
+        switchSideOnMove();
+        printBoard(board);
+
+        return board;
     }
 
-    void gameOver(char[][] board) {
+    boolean gameOver(char[][] board) {
+
+        if(moveCount > 40) {
+            System.err.println("Max move count reached!\n\n Draw!");
+            return true;
+        }
+
+        //search for kings
+        boolean isBlackKing = false;
+        boolean isWhiteKing = false;
+        for(int i = 0; i < BOARD_WIDTH; i++){
+            for(int j = 0; j < BOARD_HEIGHT; j++) {
+                char p = board[i][j];
+                if(p == 'k') {
+                    isBlackKing = true;
+                }
+                if(p == 'K') {
+                    isWhiteKing = true;
+                }
+            }
+        }
+
+        //if a king is missing, its game over
+        if(isBlackKing == false) {
+            System.err.println("Black's king has been captured!\n\nWhite Wins!");
+            return true;
+        }
+        if(isWhiteKing == false) {
+            System.err.println("White's king has been captured!\n\nBlack Wins!");
+            return true;
+        }
+
+        return false;
 
     }
 
@@ -422,7 +496,18 @@ public class State {
     }
 
     void printBoard(){
-        System.err.println(sideOnMove + " " + moveCount);
+        System.err.println("\n\n" + moveCount + " " + sideOnMove);
+        for(int i = 0; i < BOARD_HEIGHT; i++){
+            for(int j = 0; j < BOARD_WIDTH; j++) {
+                System.err.print(board[j][i]);
+            }
+            System.err.println();
+        }
+    }
+
+    //print with board arg
+    void printBoard(char[][] board){
+        System.err.println("\n\n" + moveCount + " " + sideOnMove);
         for(int i = 0; i < BOARD_HEIGHT; i++){
             for(int j = 0; j < BOARD_WIDTH; j++) {
                 System.err.print(board[j][i]);
@@ -437,6 +522,35 @@ public class State {
                 System.err.print(board[j][i]);
             }
             System.err.println();
+        }
+    }
+
+
+    void switchSideOnMove () {
+        if (sideOnMove == 'W') {
+            sideOnMove = 'B';
+        }
+        else if(sideOnMove == 'B') {
+            sideOnMove = 'W';
+        }
+        else {
+            System.err.println("Error switching move sides");
+            System.exit(-1);
+        }
+    }
+
+    void printMoveList(ArrayList<Move> moveList) {
+
+        int size = moveList.size();
+
+        if(size <= 0) {
+            System.err.println("No Moves");
+            return;
+        }
+
+        //System.err.println();
+        for(int i = 0; i < size; i++) {
+            moveList.get(i).printMove();
         }
     }
 
@@ -506,10 +620,14 @@ public class State {
                     board.printBoard();
                     System.err.println();
 
+                    board.playRandomGame();
+
+                    /*
                     ArrayList<Move> moveList = board.moveGen();
                     for(int i = 0; i < moveList.size(); i++) {
                         moveList.get(i).printMove();
                     }
+                    */
 
 
 

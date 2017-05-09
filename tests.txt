@@ -1,7 +1,7 @@
-7 B
-k.bnr
-.p.Q.
-..p.p
-P.p.P
-..P..
-R.B.K
+0 W
+kqbnr
+ppppp
+.....
+.....
+PPPPP
+RNBQK
