@@ -6,8 +6,15 @@ import java.io.FileInputStream;
 import java.lang.reflect.Array;
 import java.util.*;
 import java.lang.*;
+import java.io.*;
 
-public class State {
+
+public class State  {
+
+    static String SERVER = "imcs.svcs.cs.pdx.edu";
+    static String PORT = "3589";
+    static String USERNAME = "SleepyGary";
+    static String PASSWORD = "tinyrick";
 
     public static int BOARD_WIDTH = 5;
     public static int BOARD_HEIGHT = 6;
@@ -19,7 +26,13 @@ public class State {
     int moveCount;
     int recursionLevel = 0;
     int maxDepth = 4;
+    int NegamaxDepth = 6;
     static int WIN_VALUE = 999;
+    static int DEFAULT_ALPHA = -WIN_VALUE;
+    static int DEFAULT_BETA = WIN_VALUE;
+    int pruneCount = 0;
+    int statesEvaled = 0;
+    boolean orderingMoves = false;
 
 
     boolean verbose = false;
@@ -77,38 +90,72 @@ public class State {
     }
 
 
+    ArrayList<Move> orderMoves(ArrayList<Move> moveList, char[][] board) {
+
+        ArrayList<Move> orderedMoves = new ArrayList<>();
+        int[] MoveValues = new int[moveList.size()];
+        orderingMoves = true;
+
+        for(int i = 0; i < moveList.size(); i++){
+
+
+            Move move = moveList.get(i);
+
+            char[][] newBoard = makeMove(move, board);
+
+            int moveValue = - alphaBetaNegamax(newBoard, 2, DEFAULT_ALPHA, DEFAULT_BETA);
+            switchSideOnMove();
+            if(sideOnMove == 'B') {
+                moveCount--; //back to the original move count
+            }
+
+            MoveValues[i] = moveValue;
+        }
+
+        for(int index = 0; index < moveList.size(); index++) {
+
+            int maxValue = -WIN_VALUE;
+            int maxIndex = index;
+            for (int i = 0; i < moveList.size(); i++) {
+                if (MoveValues[i] > maxValue) {
+                    maxValue = MoveValues[i];
+                    maxIndex = i;
+                }
+            }
+            orderedMoves.add(moveList.get(maxIndex));
+            MoveValues[maxIndex] = -WIN_VALUE;
+        }
+
+        assert orderedMoves.size() == moveList.size();
+
+        orderingMoves = false;
+
+        return orderedMoves;
+    }
+
+
     int alphaBetaNegamax(final char[][] board, int depth, int alpha, int beta) {
 
-        if(verbose) {
-            System.err.println("Entering Recurrsion level: " + recursionLevel);
-        }
+        statesEvaled++;
 
-        /*char[][] oldBoard = new char[BOARD_WIDTH][BOARD_HEIGHT];
-        for(int i = 0; i < BOARD_WIDTH; i++){
-            for(int j = 0; j < BOARD_HEIGHT; j++) {
-                oldBoard[i][j] = board[i][j];
-            }
-        }
-        */
 
         //if we've won
         if(gameOver(board) || depth <= 0) {
-            if(verbose) {
-                System.err.println("Leaf Reached");
-            }
             return scoreState(board);
         }
 
         ArrayList<Move> moveList = moveGen(board);
 
-        if(verbose) {
-            printBoard(board);
-            printMoveList(moveList);
-        }
+
 
         //if theres no more possible moves
         if(moveList.size() == 0) {
             return -WIN_VALUE;
+        }
+
+        //if we're in the process of ording moves
+        if(orderingMoves == false) {
+            //moveList = orderMoves(moveList, board);
         }
 
         Move moveToMake = moveList.get(0);
@@ -116,7 +163,7 @@ public class State {
         char[][] newBoard = makeMove(moveToMake, board);
 
         recursionLevel++;
-        int bestValue = - alphaBetaNegamax(newBoard, depth - 1, -alpha, -beta);
+        int bestValue = - alphaBetaNegamax(newBoard, depth - 1, -beta, -alpha);
         recursionLevel--;
         switchSideOnMove(); //switch back to original board and original side on move
         if(sideOnMove == 'B') {
@@ -125,7 +172,8 @@ public class State {
 
 
         //if the new value is better then our old best value, return it
-        if(bestValue > beta) {
+        if(bestValue >= beta) {
+            pruneCount++;
             return bestValue;
         }
 
@@ -144,7 +192,7 @@ public class State {
         for(int i = 1; i < moveList.size(); i++) {
             newBoard = makeMove(moveList.get(i), board);
             recursionLevel++;
-            int moveValue = - alphaBetaNegamax(newBoard, depth -1, -alpha, -beta );
+            int moveValue = - alphaBetaNegamax(newBoard, depth -1, -beta, -alpha );
             recursionLevel--;
             switchSideOnMove(); //switch back
             if(sideOnMove == 'B') {
@@ -156,6 +204,7 @@ public class State {
 
             //if the new value is better then our old best value, return it
             if(moveValue >= beta) {
+                pruneCount++;
                 return moveValue;
             }
 
@@ -164,6 +213,75 @@ public class State {
         }
 
         return bestValue;
+    }
+
+
+    Move pickAlphaBetaNegaMaxMove(ArrayList<Move> moveList, char[][] board) {
+
+        int bestMoveIndex = 0;
+        int bestValue;
+
+
+        if(moveList.size() == 0) {
+            System.err.println("No moves in pickNegaMaxMove");
+            System.exit(-1);
+        }
+
+
+        moveList = orderMoves(moveList, board);
+
+        //score the first move
+        Move move = moveList.get(0);
+        char[][] newBoard = makeMove(move, board);
+
+        recursionLevel++;
+        bestValue = - alphaBetaNegamax(newBoard, maxDepth, DEFAULT_ALPHA, DEFAULT_BETA);
+        recursionLevel--;
+        switchSideOnMove(); //switch back
+        if(sideOnMove == 'B') {
+            moveCount--; //back to the original move count
+        }
+
+        move.printMove();
+        System.err.print(" Scored: " + bestValue + "\n");
+
+        //if we've found a win, return that move
+        if(bestValue == WIN_VALUE){
+            return move;
+        }
+
+        //start scoring all other possible moves, stop if you find a winner
+        for(int i = 1; i < moveList.size(); i++) {
+            move = moveList.get(i);
+            newBoard = makeMove(move, board);
+
+            int moveValue = - alphaBetaNegamax(newBoard, maxDepth, -5, 5);
+            switchSideOnMove();
+            if(sideOnMove == 'B') {
+                moveCount--; //back to the original move count
+            }
+            move.printMove();
+            System.err.print(" Scored: " + moveValue + "\n");
+
+            //if we've found a win, return that move
+            if(moveValue == WIN_VALUE){
+                return move;
+            }
+
+            //we've found a better move than we had before
+            if(moveValue > bestValue) {
+                bestMoveIndex = i;
+                bestValue = moveValue;
+            }
+
+        }
+
+        System.err.println("Prune count: " + pruneCount);
+        System.err.println("StateEvaled count: " + statesEvaled);
+        pruneCount = 0;
+        statesEvaled = 0;
+        return moveList.get(bestMoveIndex);
+
     }
 
 
@@ -341,6 +459,13 @@ public class State {
             printBoard(newBoard);
             System.err.println("Score: " + scoreState(newBoard));
             isGameOver = gameOver(newBoard);
+            if(isGameOver) {
+                continue;
+            }
+            newBoard = makeNegaMaxMove(newBoard);
+            printBoard(newBoard);
+            System.err.println("Score: " + scoreState(newBoard));
+            isGameOver = gameOver(newBoard);
         }
 
         int finalScore = scoreState(newBoard);
@@ -378,61 +503,6 @@ public class State {
         return makeMove(moveToMake, board);
     }
 
-    Move pickAlphaBetaNegaMaxMove(ArrayList<Move> moveList, char[][] board) {
-
-        int bestMoveIndex = 0;
-        int bestValue;
-
-
-        if(moveList.size() == 0) {
-            System.err.println("No moves in pickNegaMaxMove");
-            System.exit(-1);
-        }
-
-        //score the first move
-        Move move = moveList.get(0);
-        char[][] newBoard = makeMove(move, board);
-
-        recursionLevel++;
-        bestValue = - alphaBetaNegamax(newBoard, maxDepth, 0, 0);
-        recursionLevel--;
-        switchSideOnMove(); //switch back
-        if(sideOnMove == 'B') {
-            moveCount--; //back to the original move count
-        }
-
-        //if we've found a win, return that move
-        if(bestValue == WIN_VALUE){
-            return move;
-        }
-
-        //start scoring all other possible moves, stop if you find a winner
-        for(int i = 1; i < moveList.size(); i++) {
-            move = moveList.get(i);
-            newBoard = makeMove(move, board);
-
-            int moveValue = - alphaBetaNegamax(newBoard, maxDepth, 0, 0);
-            switchSideOnMove();
-            if(sideOnMove == 'B') {
-                moveCount--; //back to the original move count
-            }
-
-            //if we've found a win, return that move
-            if(moveValue == WIN_VALUE){
-                return move;
-            }
-
-            //we've found a better move than we had before
-            if(moveValue > bestValue) {
-                bestMoveIndex = i;
-                bestValue = moveValue;
-            }
-
-        }
-
-        return moveList.get(bestMoveIndex);
-
-    }
 
 
 
@@ -451,6 +521,15 @@ public class State {
             printBoard(newBoard);
             System.err.println("Score: " + scoreState(newBoard));
             isGameOver = gameOver(newBoard);
+            /*
+            if(isGameOver) {
+                continue;
+            }
+            newBoard = makeRandomMove(newBoard);
+            printBoard(newBoard);
+            System.err.println("Score: " + scoreState(newBoard));
+            isGameOver = gameOver(newBoard);
+            */
         }
 
         int finalScore = scoreState(newBoard);
@@ -503,12 +582,15 @@ public class State {
         char[][] newBoard = makeMove(move, board);
 
         recursionLevel++;
-        bestValue = - negamax(newBoard, maxDepth);
+        bestValue = - negamax(newBoard, NegamaxDepth);
         recursionLevel--;
         switchSideOnMove(); //switch back
         if(sideOnMove == 'B') {
             moveCount--; //back to the original move count
         }
+
+        move.printMove();
+        System.err.print(" Scored: " + bestValue + "\n");
 
         //if we've found a win, return that move
         if(bestValue == WIN_VALUE){
@@ -520,11 +602,14 @@ public class State {
             move = moveList.get(i);
             newBoard = makeMove(move, board);
 
-            int moveValue = - negamax(newBoard, maxDepth);
+            int moveValue = - negamax(newBoard, NegamaxDepth);
             switchSideOnMove();
             if(sideOnMove == 'B') {
                 moveCount--; //back to the original move count
             }
+
+            move.printMove();
+            System.err.print(" Scored: " + moveValue + "\n");
 
             //if we've found a win, return that move
             if(moveValue == WIN_VALUE){
@@ -801,7 +886,7 @@ public class State {
         }
 
         //make sure theres a king on the board
-        assert isKing == true;
+        //assert isKing == true;
 
         return moveList;
     }
@@ -1097,6 +1182,8 @@ public class State {
 
 
         try {
+
+            //extract input from my local test file
             FileInputStream stream = new FileInputStream("tests.txt");
             int input = 0;
 
@@ -1140,21 +1227,138 @@ public class State {
                         }
                     }
 
+
+                    /*
                     System.err.println();
                     System.err.println("Input Board: ");
                     System.err.println(sideOnMove + " " + numOfMoves);
                     print(inputBoard);
                     State board = new State(inputBoard, sideOnMove, (int)numOfMoves);
-                    System.err.println();
-                    System.err.println("State Created: ");
-                    board.printBoard();
-                    System.err.println();
+                    ArrayList<Move> moveList = board.moveGen(board.board);
+
+                    Move toMake = board.pickAlphaBetaNegaMaxMove(moveList, board.board);
+                    //Move toMake = board.pickNegaMaxMove(moveList, board.board);
+                    toMake.printMove();
+
+
+
+                    /*
+                    BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+                    int i= 0;
+                    while(i < 5){
+                        String cmd = br.readLine();
+                        Move test = new Move(cmd);
+                        test.printMove();
+                        //client.send(cmd, true);
+                        i++;
+
+                    }
+                    */
+
+
+
+                    /************* Server play ********************/
+
+                    /*
+
+                    Client client = new Client(SERVER, PORT, USERNAME, PASSWORD);
+
+                    BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+                    String inputGame = br.readLine();
+                    System.out.print("Enter color: ");
+                    String color = br.readLine();
+
+
+                    String gameID = inputGame;
+                    //char sideToPlay = client.offer('W');
+                    char sideToPlay = client.accept(gameID, 'W');
+
+
+                    //if we have first move
+                    if(sideToPlay == 'W'){
+
+                        //create a fresh board
+                        State board = new State();
+
+                        while(true) {
+
+                            //gen moves for AlphaBeta to pick from
+                            ArrayList<Move> mostList = board.moveGen(board.board);
+                            Move toMake = board.pickAlphaBetaNegaMaxMove(mostList, board.board);
+                            //Move toMake = board.pickNegaMaxMove(mostList, board.board);
+
+                            //make the selected move and send it to the oppenent
+                            board.board = board.makeMove(toMake, board.board);
+                            client.sendMove(toMake.toString());
+
+                            //wait for opponents move
+                            String oppenentMove = client.getMove();
+                            if(oppenentMove == null) {
+                                client.close();
+                                System.exit(1);
+                            }
+                            System.out.println("Opponent move: " + oppenentMove);
+
+                            //create a Move objects for move string and make the move on local board
+                            Move oppMove = new Move(oppenentMove);
+                            oppMove.printMove();
+                            board.board = board.makeMove(new Move(oppenentMove), board.board);
+                        }
+
+                    }
+
+                    //if we're second move
+                    if(sideToPlay == 'B'){
+                        //create a fresh board
+                        State board = new State();
+
+                        while(true) {
+                            String oppenentMove = client.getMove();
+                            if (oppenentMove == null) {
+                                client.close();
+                                System.exit(1);
+                            }
+
+                            //make oppenents move
+                            System.out.println("Opponent move: " + oppenentMove);
+                            Move oppMove = new Move(oppenentMove);
+                            oppMove.printMove();
+                            board.board = board.makeMove(new Move(oppenentMove), board.board);
+
+                            //make my move
+                            ArrayList<Move> mostList = board.moveGen(board.board);
+                            Move toMake = board.pickAlphaBetaNegaMaxMove(mostList, board.board);
+                            //Move toMake = board.pickNegaMaxMove(mostList, board.board);
+                            board.board = board.makeMove(toMake, board.board);
+                            client.sendMove(toMake.toString());
+                        }
+
+                    }
+                    client.close();
+
+
 
                     //board.playRandomGame();
 
                     //board.playNegaMaxGame();
 
+                    */
+
+                    /************* Alphabeta vs depth 2 negamax ********/
+
+                    /*
+                    State board = new State();
                     board.playAlphaBetaNegaMaxGame();
+                    */
+
+
+                    /************* Text input play ***********/
+
+                    State board = new State(inputBoard, sideOnMove, (int)numOfMoves);
+                    board.playNegaMaxGame();
+
+
+
 
                 }
 
