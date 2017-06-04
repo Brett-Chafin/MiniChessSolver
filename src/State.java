@@ -3,7 +3,6 @@
  */
 
 import java.io.FileInputStream;
-import java.lang.reflect.Array;
 import java.util.*;
 import java.lang.*;
 import java.io.*;
@@ -24,18 +23,19 @@ public class State  {
     char[][] board;
     char sideOnMove;
     int moveCount;
-    int recursionLevel = 0;
-    int maxDepth = 4;
-    int NegamaxDepth = 6;
+    int recursionLevel = 0;  //depth within the search tree
+    int maxDepth = 6;        //max depth used for alpha beta
+    int NegamaxDepth = 4;    //max depth used for negamax
     static int WIN_VALUE = 999;
     static int DEFAULT_ALPHA = -WIN_VALUE;
     static int DEFAULT_BETA = WIN_VALUE;
-    int pruneCount = 0;
-    int statesEvaled = 0;
+    static int ID_TIME_LIMIT = 10;      //Time limit in seconds
+    static int TIME_OUT_VALUE = 99;     //value returned if time limit has been reached in ID search
+    int pruneCount = 0;                 //keeps track of the number of prunes made in AB
+    int statesEvaled = 0;               //track the number of total states eval'ed in a given seach
     boolean orderingMoves = false;
+    volatile boolean shutdown = false;  //used to signal thread to end search in ID
 
-
-    boolean verbose = false;
 
 
     State(char[][] toBoard, char toSideOnMove, int toMoveCount) {
@@ -90,6 +90,118 @@ public class State  {
     }
 
 
+    /**
+     * The main Interative Deepening loop
+     * First creates a thread that will sleep for the designated amount of time, after
+     * which will switch the shutdown var to signal the main thread that its time has ran out
+     * The Main thread will preform on alpha beta search on a depth starting at two and increasing
+     * by 2 every time it picks a move with that depth.
+     * If the main thread runs out of time while in the middle of a search, it returns the results from
+     * the last fully completed depth
+     * @param board - board to pick a move from
+     * @return - Best Move found in the given time
+     */
+    Move pickIDMove(char[][] board) {
+
+        long startTime = System.currentTimeMillis();
+        long elapsedTime = (System.currentTimeMillis() - startTime) / 1000;
+
+        ArrayList<Move> moveList = moveGen(board);
+
+        Thread thread = new Thread(){
+            public void run() {
+                try {
+                    shutdown = false;
+                    Thread.sleep(ID_TIME_LIMIT * 1000);
+                    shutdown = true;
+                } catch (java.lang.InterruptedException err) {
+                    System.out.println();
+                }
+            }
+        };
+
+        thread.start();
+
+        maxDepth = 2;
+        Move currentMove = pickAlphaBetaNegaMaxMove(moveList, board);
+        assert currentMove != null;
+
+        char[][] currentBoard = makeMove(currentMove, board);
+        int firstStateScore = scoreState(currentBoard);
+        switchSideOnMove(); //switch back to original board and original side on move
+        if(sideOnMove == 'B') {
+            moveCount--; //back to the original move count
+        }
+
+        System.err.println();
+        System.err.println("Move found at depth " + maxDepth + ": ");
+        currentMove.printMove();
+        System.err.println();
+
+        if(firstStateScore == WIN_VALUE){
+            return currentMove;
+        }
+
+        while(!shutdown){
+
+            //increment to the next depth
+            maxDepth = maxDepth + 2;
+
+            //Make sure we're not searching past move 40
+            if(maxDepth + moveCount > 40){
+                return currentMove;
+            }
+
+            Move newMove = pickAlphaBetaNegaMaxMove(moveList, board);
+
+            //if we've ran out of time;
+            if(newMove == null){
+                break;
+            }
+
+            System.err.println();
+            System.err.println("Move found at depth " + maxDepth + ": ");
+            currentMove.printMove();
+            System.err.println();
+
+            char[][] newBoard = makeMove(newMove, board);
+            int stateScore = scoreState(newBoard);
+            switchSideOnMove(); //switch back to original board and original side on move
+            if(sideOnMove == 'B') {
+                moveCount--; //back to the original move count
+            }
+
+            //if we've won, return the winning move
+            if(stateScore == WIN_VALUE){
+               return newMove;
+            }
+
+            //if we've lost, return the previous searches move
+            if(stateScore == - WIN_VALUE) {
+                return currentMove;
+            }
+
+            currentMove = newMove;
+        }
+
+        shutdown = false;
+        return currentMove;
+
+    }
+
+
+    char[][] makeIDMove(char[][] board) {
+
+        Move moveToMake = pickIDMove(board);
+
+        System.err.println();
+        System.err.print("Moving: ");
+        moveToMake.printMove();
+
+        return makeMove(moveToMake, board);
+    }
+
+
     ArrayList<Move> orderMoves(ArrayList<Move> moveList, char[][] board) {
 
         ArrayList<Move> orderedMoves = new ArrayList<>();
@@ -103,7 +215,9 @@ public class State  {
 
             char[][] newBoard = makeMove(move, board);
 
-            int moveValue = - alphaBetaNegamax(newBoard, 2, DEFAULT_ALPHA, DEFAULT_BETA);
+            //int moveValue = - alphaBetaNegamax(newBoard, 2, DEFAULT_ALPHA, DEFAULT_BETA);
+            int moveValue = - negamax(newBoard, 2);
+            //int moveValue = - scoreState(newBoard);
             switchSideOnMove();
             if(sideOnMove == 'B') {
                 moveCount--; //back to the original move count
@@ -136,9 +250,12 @@ public class State  {
 
     int alphaBetaNegamax(final char[][] board, int depth, int alpha, int beta) {
 
+        //if we've ran out of time
+        if(shutdown){
+            return TIME_OUT_VALUE;
+        }
+
         statesEvaled++;
-
-
         //if we've won
         if(gameOver(board) || depth <= 0) {
             return scoreState(board);
@@ -170,6 +287,11 @@ public class State  {
             moveCount--; //back to the original move count
         }
 
+        //if we've timed out with the last search, return all the way up
+        if(bestValue == TIME_OUT_VALUE) {
+            return TIME_OUT_VALUE;
+        }
+
 
         //if the new value is better then our old best value, return it
         if(bestValue >= beta) {
@@ -181,14 +303,6 @@ public class State  {
         alpha = Math.max(bestValue, alpha);
 
 
-        if(verbose) {
-            System.err.println("Back in recurrsion level " + recursionLevel);
-            System.err.println("Trying the remaining moves");
-            printMoveList(moveList);
-            System.err.println("On Board");
-            printBoard(board);
-        }
-
         for(int i = 1; i < moveList.size(); i++) {
             newBoard = makeMove(moveList.get(i), board);
             recursionLevel++;
@@ -198,8 +312,10 @@ public class State  {
             if(sideOnMove == 'B') {
                 moveCount--; //back to the original move count
             }
-            if(verbose) {
-                System.err.println("Back in recurrsion level " + recursionLevel);
+
+            //if we've timed out with the last search, return all the way up
+            if(bestValue == TIME_OUT_VALUE) {
+                return TIME_OUT_VALUE;
             }
 
             //if the new value is better then our old best value, return it
@@ -220,10 +336,11 @@ public class State  {
 
         int bestMoveIndex = 0;
         int bestValue;
+        int stateScore = scoreState(board);
 
 
         if(moveList.size() == 0) {
-            System.err.println("No moves in pickNegaMaxMove");
+            System.err.println("No moves in pickAlphaBetaMove");
             System.exit(-1);
         }
 
@@ -242,6 +359,11 @@ public class State  {
             moveCount--; //back to the original move count
         }
 
+        //if we've timed out with the last search, return all the way up
+        if(bestValue == TIME_OUT_VALUE) {
+            return null;
+        }
+
         move.printMove();
         System.err.print(" Scored: " + bestValue + "\n");
 
@@ -250,22 +372,41 @@ public class State  {
             return move;
         }
 
+
         //start scoring all other possible moves, stop if you find a winner
         for(int i = 1; i < moveList.size(); i++) {
             move = moveList.get(i);
             newBoard = makeMove(move, board);
 
-            int moveValue = - alphaBetaNegamax(newBoard, maxDepth, -5, 5);
+            int moveValue;
+            if(i > 3 && stateScore >= 0) {
+                moveValue = -alphaBetaNegamax(newBoard, maxDepth, -(stateScore + 5), stateScore + 5);
+            }
+            else {
+                moveValue = -alphaBetaNegamax(newBoard, maxDepth, DEFAULT_ALPHA, DEFAULT_BETA);
+            }
             switchSideOnMove();
             if(sideOnMove == 'B') {
                 moveCount--; //back to the original move count
             }
+
+            //if we've timed out with the last search, return all the way up
+            if(bestValue == TIME_OUT_VALUE) {
+                return null;
+            }
+
             move.printMove();
             System.err.print(" Scored: " + moveValue + "\n");
+
 
             //if we've found a win, return that move
             if(moveValue == WIN_VALUE){
                 return move;
+            }
+
+            //if we've ran out of time
+            if(shutdown){
+                return null;
             }
 
             //we've found a better move than we had before
@@ -273,6 +414,14 @@ public class State  {
                 bestMoveIndex = i;
                 bestValue = moveValue;
             }
+
+
+            //This checks
+            if((bestValue - moveValue) > 4 && i > 4 && moveCount < 15 && bestValue >= stateScore && maxDepth >= 6){
+                System.err.println("Move Prune");
+                return moveList.get(bestMoveIndex);
+            }
+
 
         }
 
@@ -292,9 +441,6 @@ public class State  {
     /*************** NegaMax Depth first search without Alpha Beta pruning **********/
     int negamax(final char[][] board, int depth) {
 
-        if(verbose) {
-            System.err.println("Entering Recurrsion level: " + recursionLevel);
-        }
 
         /*char[][] oldBoard = new char[BOARD_WIDTH][BOARD_HEIGHT];
         for(int i = 0; i < BOARD_WIDTH; i++){
@@ -306,18 +452,11 @@ public class State  {
 
         //if we've won
         if(gameOver(board) || depth <= 0) {
-            if(verbose) {
-                System.err.println("Leaf Reached");
-            }
             return scoreState(board);
         }
 
         ArrayList<Move> moveList = moveGen(board);
 
-        if(verbose) {
-            printBoard(board);
-            printMoveList(moveList);
-        }
 
         //if theres no more possible moves
         if(moveList.size() == 0) {
@@ -337,13 +476,6 @@ public class State  {
         }
 
 
-        if(verbose) {
-            System.err.println("Back in recurrsion level " + recursionLevel);
-            System.err.println("Trying the remaining moves");
-            printMoveList(moveList);
-            System.err.println("On Board");
-            printBoard(board);
-        }
 
         for(int i = 1; i < moveList.size(); i++) {
             newBoard = makeMove(moveList.get(i), board);
@@ -354,9 +486,7 @@ public class State  {
             if(sideOnMove == 'B') {
                 moveCount--; //back to the original move count
             }
-            if(verbose) {
-                System.err.println("Back in recurrsion level " + recursionLevel);
-            }
+
             bestValue = Math.max(bestValue, moveValue);
         }
 
@@ -481,6 +611,43 @@ public class State  {
     }
 
 
+    /************************ID with Alpha Beta Game *****************/
+    void playIDGame() {
+
+        char[][] newBoard = board;
+        boolean isGameOver = false;
+
+        System.err.println("Now playing game with ID-AlphaBetaNegaMax moves with time: " + ID_TIME_LIMIT + " seconds\n");
+
+        printBoard(newBoard);
+
+        while(!isGameOver) {
+            newBoard = makeIDMove(newBoard);
+            printBoard(newBoard);
+            System.err.println("Score: " + scoreState(newBoard));
+            isGameOver = gameOver(newBoard);
+            if(isGameOver) {
+                continue;
+            }
+            newBoard = makeNegaMaxMove(newBoard);
+            printBoard(newBoard);
+            System.err.println("Score: " + scoreState(newBoard));
+            isGameOver = gameOver(newBoard);
+        }
+
+        int finalScore = scoreState(newBoard);
+        if((finalScore == WIN_VALUE && sideOnMove == 'W') || finalScore == -WIN_VALUE && sideOnMove == 'B'){
+            System.err.println("Win White");
+        }
+        else if((finalScore == WIN_VALUE && sideOnMove == 'B') || finalScore == -WIN_VALUE && sideOnMove == 'W' ){
+            System.err.println("Win Black");
+        }
+        else {
+            System.err.println("Draw");
+        }
+    }
+
+
     /*************** make ABNaga move ***************/
     char[][] makeAlphaBetaNegaMaxMove(char[][] board) {
 
@@ -577,6 +744,7 @@ public class State  {
             System.exit(-1);
         }
 
+        moveList = orderMoves(moveList, board);
         //score the first move
         Move move = moveList.get(0);
         char[][] newBoard = makeMove(move, board);
@@ -589,8 +757,10 @@ public class State  {
             moveCount--; //back to the original move count
         }
 
+        /*
         move.printMove();
         System.err.print(" Scored: " + bestValue + "\n");
+        */
 
         //if we've found a win, return that move
         if(bestValue == WIN_VALUE){
@@ -681,15 +851,6 @@ public class State  {
 
     char[][] makeMove(Move move, char[][] board) {
 
-        //TODO: Pawn Promotion
-
-        if(verbose) {
-            System.err.print("Trying move: ");
-            move.printMove();
-            //System.err.println("on board: ");
-            //printBoard();
-        }
-
         char[][] newBoard = new char[BOARD_WIDTH][BOARD_HEIGHT];
         for(int i = 0; i < BOARD_WIDTH; i++){
             for(int j = 0; j < BOARD_HEIGHT; j++) {
@@ -778,15 +939,9 @@ public class State  {
 
         //if a king is missing, its game over
         if(isBlackKing == false) {
-            if(verbose) {
-                System.err.println("Black's king has been captured!\n\nWhite Wins!");
-            }
             return true;
         }
         if(isWhiteKing == false) {
-            if(verbose) {
-                System.err.println("White's king has been captured!\n\nBlack Wins!");
-            }
             return true;
         }
 
@@ -794,54 +949,6 @@ public class State  {
 
     }
 
-    /***
-
-    /** Generates a list of all legal moves on the current board
-    ArrayList<Move> moveGen(){
-
-        ArrayList<Move> moveList = new ArrayList<>();
-        boolean isKing = false; //ensure theres a king on the board
-
-        if(sideOnMove == 'W') {
-            for(int i = 0; i < BOARD_WIDTH; i++){
-                for(int j = 0; j < BOARD_HEIGHT; j++) {
-                    char p = board[i][j];
-                    if(p != '.' && getColor(p) == 'W') {
-                        if(p == 'K') {
-                            isKing = true;
-                        }
-                        moveList = union(moveList, moveList(i, j));
-                    }
-                }
-            }
-        }
-
-        else if (sideOnMove == 'B'){
-            for(int i = 0; i < BOARD_WIDTH; i++){
-                for(int j = 0; j < BOARD_HEIGHT; j++) {
-                    char p = board[i][j];
-                    if(p != '.' && getColor(p) == 'B') {
-                        if(p == 'k') {
-                            isKing = true;
-                        }
-                        moveList = union(moveList, moveList(i, j));
-                    }
-                }
-            }
-        }
-
-
-        //side on move error
-        else {
-            System.err.println("Side on Move error in moveGen");
-            System.exit(-1);
-        }
-
-        //make sure theres a king on the board
-        assert isKing == true;
-
-        return moveList;
-    } */
 
 
     /******* Move gen with board argument *********/
@@ -1173,12 +1280,6 @@ public class State  {
     /******  Main *********/
     public static void main(String args[]){
 
-        /*State board = new State();
-        board.printBoard();
-        ArrayList<Move> moveList = board.moveGen();
-        for(int i = 0; i < moveList.size(); i++) {
-            moveList.get(i).printMove();
-        }*/
 
 
         try {
@@ -1228,137 +1329,131 @@ public class State  {
                     }
 
 
-                    /*
-                    System.err.println();
-                    System.err.println("Input Board: ");
-                    System.err.println(sideOnMove + " " + numOfMoves);
-                    print(inputBoard);
-                    State board = new State(inputBoard, sideOnMove, (int)numOfMoves);
-                    ArrayList<Move> moveList = board.moveGen(board.board);
 
-                    Move toMake = board.pickAlphaBetaNegaMaxMove(moveList, board.board);
-                    //Move toMake = board.pickNegaMaxMove(moveList, board.board);
-                    toMake.printMove();
-
-
-
-                    /*
-                    BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
-                    int i= 0;
-                    while(i < 5){
-                        String cmd = br.readLine();
-                        Move test = new Move(cmd);
-                        test.printMove();
-                        //client.send(cmd, true);
-                        i++;
-
-                    }
-                    */
-
+                    //flags to choose what game is ran
+                    boolean AlphaBeta = false;
+                    boolean NegaMax = false;
+                    boolean ServerPlay = false;
+                    boolean IDGame = true;
 
 
                     /************* Server play ********************/
 
-                    /*
+                    if(ServerPlay) {
 
-                    Client client = new Client(SERVER, PORT, USERNAME, PASSWORD);
+                        Client client = new Client(SERVER, PORT, USERNAME, PASSWORD);
 
-                    BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
-                    String inputGame = br.readLine();
-                    System.out.print("Enter color: ");
-                    String color = br.readLine();
+                        char sideToPlay = 'z';
 
+                        System.out.println("Offer or accept? (O/A) ");
+                        BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+                        String Input = br.readLine();
+                        if (Input.charAt(0) == 'O') {
+                            System.out.print("Enter color: ");
+                            String color = br.readLine();
+                            sideToPlay = client.offer(color.charAt(0));
+                        } else if (Input.charAt(0) == 'A') {
+                            System.out.println("Enter gameID to join: ");
+                            String gameID = br.readLine();
 
-                    String gameID = inputGame;
-                    //char sideToPlay = client.offer('W');
-                    char sideToPlay = client.accept(gameID, 'W');
+                            System.out.print("Enter color: ");
+                            String color = br.readLine();
 
-
-                    //if we have first move
-                    if(sideToPlay == 'W'){
-
-                        //create a fresh board
-                        State board = new State();
-
-                        while(true) {
-
-                            //gen moves for AlphaBeta to pick from
-                            ArrayList<Move> mostList = board.moveGen(board.board);
-                            Move toMake = board.pickAlphaBetaNegaMaxMove(mostList, board.board);
-                            //Move toMake = board.pickNegaMaxMove(mostList, board.board);
-
-                            //make the selected move and send it to the oppenent
-                            board.board = board.makeMove(toMake, board.board);
-                            client.sendMove(toMake.toString());
-
-                            //wait for opponents move
-                            String oppenentMove = client.getMove();
-                            if(oppenentMove == null) {
-                                client.close();
-                                System.exit(1);
-                            }
-                            System.out.println("Opponent move: " + oppenentMove);
-
-                            //create a Move objects for move string and make the move on local board
-                            Move oppMove = new Move(oppenentMove);
-                            oppMove.printMove();
-                            board.board = board.makeMove(new Move(oppenentMove), board.board);
+                            sideToPlay = client.accept(gameID, color.charAt(0));
+                        } else {
+                            System.out.println("Wrong input");
+                            return;
                         }
 
-                    }
 
-                    //if we're second move
-                    if(sideToPlay == 'B'){
-                        //create a fresh board
-                        State board = new State();
+                        //if we have first move
+                        if (sideToPlay == 'W') {
 
-                        while(true) {
-                            String oppenentMove = client.getMove();
-                            if (oppenentMove == null) {
-                                client.close();
-                                System.exit(1);
+                            //create a fresh board
+                            State board = new State();
+
+                            while (true) {
+
+                                //gen moves for AlphaBeta to pick from
+                                Move toMake = board.pickIDMove(board.board);
+                                //Move toMake = board.pickNegaMaxMove(mostList, board.board);
+
+                                //make the selected move and send it to the oppenent
+                                board.board = board.makeMove(toMake, board.board);
+                                client.sendMove(toMake.toString());
+
+                                //wait for opponents move
+                                String oppenentMove = client.getMove();
+                                if (oppenentMove == null) {
+                                    client.close();
+                                    System.exit(1);
+                                }
+                                System.out.println("Opponent move: " + oppenentMove);
+
+                                //create a Move objects for move string and make the move on local board
+                                Move oppMove = new Move(oppenentMove);
+                                oppMove.printMove();
+                                board.board = board.makeMove(new Move(oppenentMove), board.board);
                             }
 
-                            //make oppenents move
-                            System.out.println("Opponent move: " + oppenentMove);
-                            Move oppMove = new Move(oppenentMove);
-                            oppMove.printMove();
-                            board.board = board.makeMove(new Move(oppenentMove), board.board);
-
-                            //make my move
-                            ArrayList<Move> mostList = board.moveGen(board.board);
-                            Move toMake = board.pickAlphaBetaNegaMaxMove(mostList, board.board);
-                            //Move toMake = board.pickNegaMaxMove(mostList, board.board);
-                            board.board = board.makeMove(toMake, board.board);
-                            client.sendMove(toMake.toString());
                         }
 
+                        //if we're second move
+                        if (sideToPlay == 'B') {
+                            //create a fresh board
+                            State board = new State();
+
+                            while (true) {
+                                String oppenentMove = client.getMove();
+                                if (oppenentMove == null) {
+                                    client.close();
+                                    System.exit(1);
+                                }
+
+                                //make oppenents move
+                                System.out.println("Opponent move: " + oppenentMove);
+                                Move oppMove = new Move(oppenentMove);
+                                oppMove.printMove();
+                                board.board = board.makeMove(new Move(oppenentMove), board.board);
+
+                                //make my move
+                                //ArrayList<Move> mostList = board.moveGen(board.board);
+                                //Move toMake = board.pickAlphaBetaNegaMaxMove(mostList, board.board);
+                                //Move toMake = board.pickNegaMaxMove(mostList, board.board);
+                                Move toMake = board.pickIDMove(board.board);
+                                board.board = board.makeMove(toMake, board.board);
+                                client.sendMove(toMake.toString());
+                            }
+
+                        }
+                        client.close();
                     }
-                    client.close();
 
+                    /************* IDGame vs depth 2 negamax ***********/
 
+                    if(IDGame){
+                        State board = new State();
+                        board.playIDGame();
+                    }
 
-                    //board.playRandomGame();
-
-                    //board.playNegaMaxGame();
-
-                    */
 
                     /************* Alphabeta vs depth 2 negamax ********/
 
-                    /*
-                    State board = new State();
-                    board.playAlphaBetaNegaMaxGame();
-                    */
+
+                    if(AlphaBeta) {
+                        State board = new State();
+                        board.playAlphaBetaNegaMaxGame();
+                    }
 
 
-                    /************* Text input play ***********/
-
-                    State board = new State(inputBoard, sideOnMove, (int)numOfMoves);
-                    board.playNegaMaxGame();
+                    /************* NegaMax Game ***********/
 
 
-
+                    if(NegaMax) {
+                        State board = new State(inputBoard, sideOnMove, (int) numOfMoves);
+                        board.playNegaMaxGame();
+                        return;
+                    }
 
                 }
 
